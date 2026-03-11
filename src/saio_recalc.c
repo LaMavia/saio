@@ -206,7 +206,7 @@ recalculate(QueryTree *tree, bool fake, void *extra_data)
 	Assert(list_length(root->join_rel_list) == n + 1);
 	/* move the list cell to the correct memory context */
 	cur = list_tail(root->join_rel_list);
-	root->join_rel_list = list_delete_cell(root->join_rel_list, cur, prev);
+	root->join_rel_list = list_delete_cell(root->join_rel_list, cur);
 	root->join_rel_list = lappend(root->join_rel_list, rel);
 	/* move the rel hash to the correct memory context */
 	if (had_no_hash && root->join_rel_hash != NULL)

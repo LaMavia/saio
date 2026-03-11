@@ -82,7 +82,7 @@ merge_trees(PlannerInfo *root, List *result, QueryTree *tree, bool force)
 				set_cheapest(joinrel);
 
 				/* Remove the old tree from the list */
-				result = list_delete_cell(result, lc, prev);
+				result = list_delete_cell(result, lc);
 
 				/* Recursively merge the new tree into the list */
 				return merge_trees(root, result, new_tree, force);
