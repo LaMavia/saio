@@ -15,7 +15,6 @@
 #include <math.h>
 
 #include "utils/memutils.h"
-#include "nodes/relation.h"
 #include "nodes/pg_list.h"
 #include "optimizer/pathnode.h"
 #include "optimizer/paths.h"

@@ -17,7 +17,6 @@
 #include <printf.h>
 
 #include "optimizer/paths.h"
-#include "nodes/relation.h"
 #include "nodes/pg_list.h"
 
 #include "saio.h"
