@@ -64,7 +64,7 @@ context_exit(PlannerInfo *root)
 	MemoryContextSwitchTo(private->old_context);
 
 	/* remove everything in the sketch context, but keep the context itself */
-	MemoryContextResetAndDeleteChildren(private->sketch_context);
+	MemoryContextReset(private->sketch_context);
 }
 
 
@@ -85,7 +85,7 @@ context_exit_mem(PlannerInfo *root)
 	MemoryContextSwitchTo(private->old_context);
 
 	/* remove everything in the sketch context, but keep the context itself */
-	MemoryContextResetAndDeleteChildren(private->sketch_context);
+	MemoryContextReset(private->sketch_context);
 }
 
 
