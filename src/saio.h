@@ -21,6 +21,10 @@
 #define SAIO_GUC_HOOK_VALUES NULL, NULL
 #endif
 
+#include <postgres.h>
+
+#include "optimizer/extendplan.h"
+
 /* These get set by GUC */
 extern double saio_seed;
 extern int saio_equilibrium_factor;
