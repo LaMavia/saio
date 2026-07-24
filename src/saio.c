@@ -14,15 +14,15 @@
 
 #include <math.h>
 
-#include "utils/memutils.h"
 #include "nodes/pg_list.h"
 #include "optimizer/pathnode.h"
 #include "optimizer/paths.h"
+#include "utils/memutils.h"
 
 #include "saio.h"
-#include "saio_util.h"
-#include "saio_trees.h"
 #include "saio_probes.h"
+#include "saio_trees.h"
+#include "saio_util.h"
 
 extern SaioAlgorithm algorithm;
 
@@ -31,263 +31,236 @@ extern SaioAlgorithm algorithm;
  * make_join_rel(). Enter a temporary memory context that will get reset when
  * we leave the context. See geqo_eval() for similar code and explanations.
  */
-void
-context_enter(PlannerInfo *root)
-{
-	SaioPrivateData	*private = (SaioPrivateData *) root->join_search_private;
+void context_enter(PlannerInfo *root) {
+  SaioPrivateData *private =
+      (SaioPrivateData *)GetPlannerInfoExtensionState(root, saio_extension_id);
 
-	/* join_rel_list and join_rel_hash get added to in make_join_rel() */
-	private->savelength = list_length(root->join_rel_list);
-	private->savehash = root->join_rel_hash;
-	/* if a hash has already been built, we need to get rid of it */
-	root->join_rel_hash = NULL;
+  /* join_rel_list and join_rel_hash get added to in make_join_rel() */
+  private->savelength = list_length(root->join_rel_list);
+  private->savehash = root->join_rel_hash;
+  /* if a hash has already been built, we need to get rid of it */
+  root->join_rel_hash = NULL;
 
-	/* switch to the sketch context */
-	private->old_context = MemoryContextSwitchTo(private->sketch_context);
+  /* switch to the sketch context */
+  private->old_context = MemoryContextSwitchTo(private->sketch_context);
 }
-
 
 /*
  * Restore the state, reset the sketch memory context.
  */
-void
-context_exit(PlannerInfo *root)
-{
-	SaioPrivateData	*private = (SaioPrivateData *) root->join_search_private;
+void context_exit(PlannerInfo *root) {
+  SaioPrivateData *private =
+      (SaioPrivateData *)GetPlannerInfoExtensionState(root, saio_extension_id);
 
-	/* restore join_rel_list and join_rel_hash */
-	root->join_rel_list = list_truncate(root->join_rel_list,
-										private->savelength);
-	root->join_rel_hash = private->savehash;
+  /* restore join_rel_list and join_rel_hash */
+  root->join_rel_list = list_truncate(root->join_rel_list, private->savelength);
+  root->join_rel_hash = private->savehash;
 
-	/* switch back to the old context */
-	MemoryContextSwitchTo(private->old_context);
+  /* switch back to the old context */
+  MemoryContextSwitchTo(private->old_context);
 
-	/* remove everything in the sketch context, but keep the context itself */
-	MemoryContextReset(private->sketch_context);
+  /* remove everything in the sketch context, but keep the context itself */
+  MemoryContextReset(private->sketch_context);
 }
 
+void context_enter_mem(PlannerInfo *root) {
+  SaioPrivateData *private =
+      (SaioPrivateData *)GetPlannerInfoExtensionState(root, saio_extension_id);
 
-void
-context_enter_mem(PlannerInfo *root)
-{
-	SaioPrivateData	*private = (SaioPrivateData *) root->join_search_private;
-
-	/* switch to the sketch context */
-	private->old_context = MemoryContextSwitchTo(private->sketch_context);
+  /* switch to the sketch context */
+  private->old_context = MemoryContextSwitchTo(private->sketch_context);
 }
 
+void context_exit_mem(PlannerInfo *root) {
+  SaioPrivateData *private =
+      (SaioPrivateData *)GetPlannerInfoExtensionState(root, saio_extension_id);
+  MemoryContextSwitchTo(private->old_context);
 
-void
-context_exit_mem(PlannerInfo *root)
-{
-	SaioPrivateData	*private = (SaioPrivateData *) root->join_search_private;
-	MemoryContextSwitchTo(private->old_context);
-
-	/* remove everything in the sketch context, but keep the context itself */
-	MemoryContextReset(private->sketch_context);
+  /* remove everything in the sketch context, but keep the context itself */
+  MemoryContextReset(private->sketch_context);
 }
 
+bool acceptable(PlannerInfo *root, Cost new_cost) {
+  SaioPrivateData *private =
+      (SaioPrivateData *)GetPlannerInfoExtensionState(root, saio_extension_id);
 
-bool
-acceptable(PlannerInfo *root, Cost new_cost)
-{
-	SaioPrivateData *private = (SaioPrivateData *) root->join_search_private;
-
-	return compare_costs(root, private->previous_cost,
-						 new_cost, private->temperature);
+  return compare_costs(root, private->previous_cost, new_cost,
+                       private->temperature);
 }
 
+bool compare_costs(PlannerInfo *root, Cost previous_cost, Cost new_cost,
+                   double temperature) {
+  /* downhill moves are always acceptable */
+  if (new_cost < previous_cost)
+    return true;
 
-bool
-compare_costs(PlannerInfo *root, Cost previous_cost,
-			  Cost new_cost, double temperature)
-{
-	/* downhill moves are always acceptable */
-	if (new_cost < previous_cost)
-		return true;
+  /*
+   * If temperature < 1, moves that do not change state are considered
+   * unacceptable.
+   *
+   * FIXME: this is to avoid endless loop with the same temperature and state
+   * that is not changing, figure out *why* that happens and prevent it
+   */
+  if ((temperature < 1) && (previous_cost == new_cost))
+    return false;
 
-	/*
-	 * If temperature < 1, moves that do not change state are considered
-	 * unacceptable.
-	 *
-	 * FIXME: this is to avoid endless loop with the same temperature and state
-	 * that is not changing, figure out *why* that happens and prevent it
-	 */
-	if ((temperature < 1) && (previous_cost == new_cost))
-		return false;
-
-	/*
-	 * Uphill moves are acceptable with probability
-	 *  exp((old - new) / temperature)
-	 */
-	return (saio_rand(root) < exp(((double) (previous_cost - new_cost)) / temperature));
+  /*
+   * Uphill moves are acceptable with probability
+   *  exp((old - new) / temperature)
+   */
+  return (saio_rand(root) <
+          exp(((double)(previous_cost - new_cost)) / temperature));
 }
 
+static bool equilibrium(PlannerInfo *root) {
+  SaioPrivateData *private =
+      (SaioPrivateData *)GetPlannerInfoExtensionState(root, saio_extension_id);
 
-static bool
-equilibrium(PlannerInfo *root)
-{
-	SaioPrivateData	*private = (SaioPrivateData *) root->join_search_private;
+  private->elapsed_loops++;
 
-	private->elapsed_loops++;
+  if (private->elapsed_loops >= private->equilibrium_loops) {
+    /* reset the elapsed loops count */
+    private->elapsed_loops = 0;
+    /* equilibrium reached */
+    return true;
+  }
 
-	if (private->elapsed_loops >= private->equilibrium_loops)
-	{
-		/* reset the elapsed loops count */
-		private->elapsed_loops = 0;
-		/* equilibrium reached */
-		return true;
-	}
-
-	return false;
+  return false;
 }
 
+static void reduce_temperature(PlannerInfo *root) {
+  SaioPrivateData *private =
+      (SaioPrivateData *)GetPlannerInfoExtensionState(root, saio_extension_id);
 
-static void
-reduce_temperature(PlannerInfo *root)
-{
-	SaioPrivateData	*private = (SaioPrivateData *) root->join_search_private;
-
-	private->temperature *= saio_temperature_reduction_factor;
+  private->temperature *= saio_temperature_reduction_factor;
 }
 
+static bool frozen(PlannerInfo *root) {
+  SaioPrivateData *private =
+      (SaioPrivateData *)GetPlannerInfoExtensionState(root, saio_extension_id);
 
-static bool
-frozen(PlannerInfo *root)
-{
-	SaioPrivateData	*private = (SaioPrivateData *) root->join_search_private;
+  /* can only be frozen when temperature < 1 */
+  if (private->temperature > 1)
+    return false;
 
-	/* can only be frozen when temperature < 1 */
-	if (private->temperature > 1)
-		return false;
-
-	/* check the number of consecutive failed moves */
-	return private->failed_moves >= saio_moves_before_frozen;
+  /* check the number of consecutive failed moves */
+  return private->failed_moves >= saio_moves_before_frozen;
 }
 
+RelOptInfo *saio(PlannerInfo *root, int levels_needed, List *initial_rels) {
+  QueryTree *tree;
+  List *all_trees;
+  RelOptInfo *res;
+  SaioPrivateData private;
+  bool ok;
 
-RelOptInfo *
-saio(PlannerInfo *root, int levels_needed, List *initial_rels)
-{
-	QueryTree		*tree;
-	List			*all_trees;
-	RelOptInfo		*res;
-	SaioPrivateData	private;
-	bool			ok;
+  TRACE_SAIO_PLANNING_START();
 
-	TRACE_SAIO_PLANNING_START();
+  /* Initialize private data */
+  SetPlannerInfoExtensionState(root, saio_extension_id, &private);
+  // GetPlannerInfoExtensionState(root, saio_extension_id) = (void *)&private;
 
-	/* Initialize private data */
-	root->join_search_private = (void *) &private;
+  /* Initialize the random state */
+  initialize_random_state(root, saio_seed);
 
-	/* Initialize the random state */
-	initialize_random_state(root, saio_seed);
+  /*
+   * Create a sketch memory context as a child of the current context, so it
+   * gets cleaned automatically in case of a ereport(ERROR) exit.
+   */
+  private.sketch_context = AllocSetContextCreate(
+      CurrentMemoryContext, "SAIO", ALLOCSET_DEFAULT_MINSIZE,
+      ALLOCSET_DEFAULT_INITSIZE, ALLOCSET_DEFAULT_MAXSIZE);
 
-	/*
-	 * Create a sketch memory context as a child of the current context, so it
-	 * gets cleaned automatically in case of a ereport(ERROR) exit.
-	 */
-	private.sketch_context = AllocSetContextCreate(CurrentMemoryContext,
-												   "SAIO",
-												   ALLOCSET_DEFAULT_MINSIZE,
-												   ALLOCSET_DEFAULT_INITSIZE,
-												   ALLOCSET_DEFAULT_MAXSIZE);
+  /* Create a context for keeping the minimum state */
+  private.min_context = AllocSetContextCreate(
+      CurrentMemoryContext, "SAIO min", ALLOCSET_DEFAULT_MINSIZE,
+      ALLOCSET_DEFAULT_INITSIZE, ALLOCSET_DEFAULT_MAXSIZE);
+  /*
+   * Build a query tree from the initial relations. This should a tree that
+   * represents any valid join order for the given set of rels.
+   * Do it in a sketch context to avoid polluting root->join_rel_list and
+   * root->join_rel_hash and to be able to free the memory taken by
+   * constructing paths after determining an initial join order.
+   */
+  context_enter(root);
 
-	/* Create a context for keeping the minimum state */
-	private.min_context = AllocSetContextCreate(CurrentMemoryContext,
-												"SAIO min",
-												ALLOCSET_DEFAULT_MINSIZE,
-												ALLOCSET_DEFAULT_INITSIZE,
-												ALLOCSET_DEFAULT_MAXSIZE);
-	/*
-	 * Build a query tree from the initial relations. This should a tree that
-	 * represents any valid join order for the given set of rels.
-	 * Do it in a sketch context to avoid polluting root->join_rel_list and
-	 * root->join_rel_hash and to be able to free the memory taken by
-	 * constructing paths after determining an initial join order.
-	 */
-	context_enter(root);
+  tree = make_query_tree(root, initial_rels);
+  /* Set the initial tree cost */
+  private.previous_cost = SAIO_COST(tree->rel);
 
-	tree = make_query_tree(root, initial_rels);
-	/* Set the initial tree cost */
-	private.previous_cost = SAIO_COST(tree->rel);
+  /*
+   * Copy the tree structure to the correct memory context. The rest of the
+   * memory allocated in make_query_tree() will get freed in context_exit().
+   */
+  MemoryContextSwitchTo(private.old_context);
+  tree = copy_tree_structure(tree);
+  MemoryContextSwitchTo(private.sketch_context);
 
-	/*
-	 * Copy the tree structure to the correct memory context. The rest of the
-	 * memory allocated in make_query_tree() will get freed in context_exit().
-	 */
-	MemoryContextSwitchTo(private.old_context);
-	tree = copy_tree_structure(tree);
-	MemoryContextSwitchTo(private.sketch_context);
+  context_exit(root);
 
-	context_exit(root);
+  /* Set the number of loops before considering equilibrium */
+  private.equilibrium_loops = levels_needed * saio_equilibrium_factor;
+  /* Set the initial temperature */
+  private.temperature = (double)private.previous_cost;
+  private.temperature *= saio_initial_temperature_factor;
+  /* Initialize the elapsed loops and failed moves counters */
+  private.elapsed_loops = 0;
+  private.failed_moves = 0;
+  /* Initialize the minimal state */
+  private.min_tree = NULL;
 
-	/* Set the number of loops before considering equilibrium */
-	private.equilibrium_loops = levels_needed * saio_equilibrium_factor;
-	/* Set the initial temperature */
-	private.temperature = (double) private.previous_cost;
-	private.temperature *= saio_initial_temperature_factor;
-	/* Initialize the elapsed loops and failed moves counters */
-	private.elapsed_loops = 0;
-	private.failed_moves = 0;
-	/* Initialize the minimal state */
-	private.min_tree = NULL;
+  /* initialize the algorithm */
+  if (algorithm.initialize != NULL)
+    algorithm.initialize(root, tree);
 
-	/* initialize the algorithm */
-	if (algorithm.initialize != NULL)
-		algorithm.initialize(root, tree);
+  /*
+   * Get the list of all trees to then pick randomly from them when doing SA
+   * algorithm moves.
+   */
+  all_trees = get_all_nodes(tree);
 
-	/*
-	 * Get the list of all trees to then pick randomly from them when doing SA
-	 * algorithm moves.
-	 */
-	all_trees = get_all_nodes(tree);
+  do {
 
-	do {
+    do {
+      saio_result move_result = SAIO_MOVE_OK;
+      move_result = algorithm.step(root, tree, all_trees);
 
-		do {
-			saio_result	move_result = SAIO_MOVE_OK;
-			move_result = algorithm.step(root, tree, all_trees);
+      TRACE_SAIO_STEP_DONE(move_result, (int)rint(SAIO_COST(tree->rel)),
+                           (int)rint(private.temperature),
+                           private.elapsed_loops, private.failed_moves);
 
-			TRACE_SAIO_STEP_DONE(move_result,
-								 (int) rint(SAIO_COST(tree->rel)),
-								 (int) rint(private.temperature),
-								 private.elapsed_loops, private.failed_moves);
+      if (move_result == SAIO_MOVE_OK)
+        private.failed_moves = 0;
+      else
+        private.failed_moves++;
 
-			if (move_result == SAIO_MOVE_OK)
-				private.failed_moves = 0;
-			else
-				private.failed_moves++;
+    } while (!equilibrium(root));
 
-		} while (!equilibrium(root));
+    reduce_temperature(root);
 
-		reduce_temperature(root);
+  } while (!frozen(root));
 
-	} while (!frozen(root));
+  /* if there is a global minimum, pick it */
+  if (private.min_tree != NULL) {
+    tree = private.min_tree;
+  }
 
-	/* if there is a global minimum, pick it */
-	if (private.min_tree != NULL)
-	{
-		tree = private.min_tree;
-	}
+  /* Finalize the algorithm */
+  if (algorithm.finalize != NULL)
+    algorithm.finalize(root, tree);
 
-	/* Finalize the algorithm */
-	if (algorithm.finalize != NULL)
-		algorithm.finalize(root, tree);
+  /* Rebuild the final rel in the correct memory context */
+  ok = recalculate_tree(root, tree);
+  Assert(ok);
+  res = tree->rel;
 
-	/* Rebuild the final rel in the correct memory context */
-	ok = recalculate_tree(root, tree);
-	Assert(ok);
-	res = tree->rel;
+  /* Clean up */
+  list_free(all_trees);
+  MemoryContextDelete(private.sketch_context);
+  MemoryContextDelete(private.min_context);
+  SetPlannerInfoExtensionState(root, saio_extension_id, NULL);
 
-	/* Clean up */
-	list_free(all_trees);
-	MemoryContextDelete(private.sketch_context);
-	MemoryContextDelete(private.min_context);
-	root->join_search_private = NULL;
+  TRACE_SAIO_PLANNING_DONE();
 
-	TRACE_SAIO_PLANNING_DONE();
-
-	return res;
+  return res;
 }

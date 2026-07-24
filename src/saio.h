@@ -22,12 +22,14 @@
 #endif
 
 /* These get set by GUC */
-extern double	saio_seed;
-extern int		saio_equilibrium_factor;
-extern double	saio_initial_temperature_factor;
-extern double	saio_temperature_reduction_factor;
-extern int		saio_moves_before_frozen;
-extern int		saio_move_algorithm;
+extern double saio_seed;
+extern int saio_equilibrium_factor;
+extern double saio_initial_temperature_factor;
+extern double saio_temperature_reduction_factor;
+extern int saio_moves_before_frozen;
+extern int saio_move_algorithm;
+
+extern int saio_extension_id;
 
 /*
  * A tree that represents a join order.
@@ -37,16 +39,15 @@ extern int		saio_move_algorithm;
  * relation.
  */
 typedef struct QueryTree {
-	RelOptInfo			*rel;
-	RelOptInfo			*tmp;
-	struct QueryTree	*left;
-	struct QueryTree	*right;
-	struct QueryTree	*parent;
-	MemoryContext		ctx;
-	MemoryContext		tmpctx;
-	Cost				previous_cost;
+  RelOptInfo *rel;
+  RelOptInfo *tmp;
+  struct QueryTree *left;
+  struct QueryTree *right;
+  struct QueryTree *parent;
+  MemoryContext ctx;
+  MemoryContext tmpctx;
+  Cost previous_cost;
 } QueryTree;
-
 
 /*
  * Private data for the SAIO algorithm. Keeps the the state of variables that
@@ -58,47 +59,42 @@ typedef struct QueryTree {
  * lots of them, we need to free the memory after each try.
  */
 typedef struct SaioPrivateData {
-	MemoryContext	old_context;		/* the saved memory context */
-	MemoryContext	sketch_context;		/* the sketch memory context */
-	int				savelength;			/* length of planner's join_rel_list */
-	struct HTAB		*savehash;			/* the planner's join_rel_hash */
+  MemoryContext old_context;    /* the saved memory context */
+  MemoryContext sketch_context; /* the sketch memory context */
+  int savelength;               /* length of planner's join_rel_list */
+  struct HTAB *savehash;        /* the planner's join_rel_hash */
 
-	Cost			previous_cost;		/* the previously computed cost */
-	Cost			min_cost;			/* globally cheapest cost */
-	MemoryContext	min_context;		/* context for the cheapest tree */
-	QueryTree		*min_tree;			/* globally cheapest tree */
+  Cost previous_cost;        /* the previously computed cost */
+  Cost min_cost;             /* globally cheapest cost */
+  MemoryContext min_context; /* context for the cheapest tree */
+  QueryTree *min_tree;       /* globally cheapest tree */
 
-	int				failed_moves;		/* moves that did not change the tree */
-	int				equilibrium_loops;	/* loops before reaching equilibrium */
-	int				elapsed_loops;		/* loops elapsed */
-	double			temperature;		/* current system temperature */
+  int failed_moves;      /* moves that did not change the tree */
+  int equilibrium_loops; /* loops before reaching equilibrium */
+  int elapsed_loops;     /* loops elapsed */
+  double temperature;    /* current system temperature */
 
-	unsigned short	random_state[3];	/* state for erand48() */
+  unsigned short random_state[3]; /* state for erand48() */
 } SaioPrivateData;
 
-
-typedef enum saio_algorithm
-{
-	SAIO_ALGORITHM_MOVE = 0,
-	SAIO_ALGORITHM_PIVOT,
-	SAIO_ALGORITHM_RECALC,
+typedef enum saio_algorithm {
+  SAIO_ALGORITHM_MOVE = 0,
+  SAIO_ALGORITHM_PIVOT,
+  SAIO_ALGORITHM_RECALC,
 } saio_algorithm;
 
-
-typedef enum saio_result
-{
-	SAIO_MOVE_OK = 0,
-	SAIO_MOVE_FAILED_FAST,
-	SAIO_MOVE_FAILED,
-	SAIO_MOVE_DISCARDED,
-	SAIO_MOVE_IMPOSSIBLE
+typedef enum saio_result {
+  SAIO_MOVE_OK = 0,
+  SAIO_MOVE_FAILED_FAST,
+  SAIO_MOVE_FAILED,
+  SAIO_MOVE_DISCARDED,
+  SAIO_MOVE_IMPOSSIBLE
 } saio_result;
 
 typedef struct SaioAlgorithm {
-	saio_result (*step) (PlannerInfo *root,
-							  QueryTree *tree, List *all_trees);
-	void (*initialize) (PlannerInfo *root, QueryTree *tree);
-	void (*finalize) (PlannerInfo *root, QueryTree *tree);
+  saio_result (*step)(PlannerInfo *root, QueryTree *tree, List *all_trees);
+  void (*initialize)(PlannerInfo *root, QueryTree *tree);
+  void (*finalize)(PlannerInfo *root, QueryTree *tree);
 } SaioAlgorithm;
 
 void context_enter(PlannerInfo *root);
@@ -108,13 +104,12 @@ void context_enter_mem(PlannerInfo *root);
 void context_exit_mem(PlannerInfo *root);
 
 bool acceptable(PlannerInfo *root, Cost new_cost);
-bool compare_costs(PlannerInfo *root, Cost new_cost,
-				   Cost previous_cost, double temperature);
-
+bool compare_costs(PlannerInfo *root, Cost new_cost, Cost previous_cost,
+                   double temperature);
 
 RelOptInfo *saio(PlannerInfo *root, int levels_needed, List *initial_rels);
 
 void _PG_init(void);
 void _PG_fini(void);
 
-#endif	/* SAIO_H */
+#endif /* SAIO_H */
